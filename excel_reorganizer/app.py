@@ -3,6 +3,7 @@ import pandas as pd
 from collections import defaultdict
 from io import BytesIO
 import difflib
+import os
 
 REQUIRED_COLUMNS = [
     'serial', 'total qty', 'spare qty', 'item no.', 'description', 'unit price ($)'
@@ -130,7 +131,8 @@ uploaded_file = st.file_uploader("Upload the input Excel file", type=["xlsx"])
 
 if uploaded_file:
     with st.spinner("Processing all sheets..."):
-        output_excel = process_excel(uploaded_file, "AMI.xlsx")
+        ami_path = os.path.join(os.path.dirname(__file__), "AMI.xlsx")
+        output_excel = process_excel(uploaded_file, ami_path)
 
     st.success("✅ File processed successfully!")
     st.download_button(
