@@ -125,7 +125,7 @@ def process_excel(uploaded_file, ami_path):
 
 
 # ===== Streamlit Interface =====
-st.title("🔧 Spare Parts Formatter (Multi-Sheet + Fuzzy Matching)")
+st.title("🔧 Excel Re-organizer")
 
 uploaded_file = st.file_uploader("Upload the input Excel file", type=["xlsx"])
 
