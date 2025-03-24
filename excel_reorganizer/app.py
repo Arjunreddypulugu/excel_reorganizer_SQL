@@ -88,17 +88,17 @@ def process_single_sheet(input_df, ami_df):
         })
 
         for part in parts:
-            desc = part['Description']
-            grouped_parts[desc]["Item no."] = part['Item no.']
-            grouped_parts[desc]["Unit Price ($)"] = part['Unit Price ($)']
-            grouped_parts[desc]["Total qty"] += part['Total qty']
-            grouped_parts[desc]["Spare qty"] += part['Spare qty']
+            item_no = part['Item no.']
+            grouped_parts[item_no]["Description"] = part['Description']
+            grouped_parts[item_no]["Unit Price ($)"] = part['Unit Price ($)']
+            grouped_parts[item_no]["Total qty"] += part['Total qty']
+            grouped_parts[item_no]["Spare qty"] += part['Spare qty']
 
-        for description in sorted(grouped_parts.keys()):
-            data = grouped_parts[description]
+        for item_no in sorted(grouped_parts.keys()):
+            data = grouped_parts[item_no]
             output_rows.append([
                 '', '', data['Total qty'], data['Spare qty'],
-                data['Item no.'], description, data['Unit Price ($)']
+                 item_no, data['Description'], data['Unit Price ($)']
             ])
 
     return pd.DataFrame(output_rows, columns=[
