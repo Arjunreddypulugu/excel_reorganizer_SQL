@@ -1,109 +1,141 @@
 import streamlit as st
 import pandas as pd
-import os
 from collections import defaultdict
 from io import BytesIO
+import difflib
 
-# Define the path to AMI.xlsx dynamically
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-AMI_PATH = os.path.join(BASE_DIR, "AMI.xlsx")
+REQUIRED_COLUMNS = [
+    'serial', 'total qty', 'spare qty', 'item no.', 'description', 'unit price ($)'
+]
 
-# Debug: Check if AMI.xlsx exists
-if not os.path.exists(AMI_PATH):
-    st.error(f"❌ AMI.xlsx not found at: {AMI_PATH}")
-    st.stop()  # Stop execution if file is missing
-else:
-    st.write(f"✅ AMI.xlsx found at: {AMI_PATH}")
+def find_best_column_matches(df_columns):
+    normalized = {col.lower().strip(): col for col in df_columns}
+    matches = {}
+    for target in REQUIRED_COLUMNS:
+        close_matches = difflib.get_close_matches(target, normalized.keys(), n=1, cutoff=0.6)
+        if close_matches:
+            matches[target] = normalized[close_matches[0]]
+        else:
+            raise ValueError(f"Could not find a match for required column: '{target}'")
+    return matches
 
-def process_excel(uploaded_file, ami_path):
-    input_df = pd.read_excel(uploaded_file, sheet_name="FCC Placer MSW - Spares List")
-    ami_df = pd.read_excel(ami_path, sheet_name="EquipmentDB")
 
-    # Extract necessary columns
-    input_df = input_df[['Serial', 'Total qty', 'Spare qty', 'Item no.', 'Description', 'Unit Price ($)']]
+def process_single_sheet(input_df, ami_df):
+    col_map = find_best_column_matches(input_df.columns)
+    input_df = input_df.rename(columns={v: k.title() for k, v in col_map.items()})
+    input_df = input_df[[k.title() for k in REQUIRED_COLUMNS]]
+
     ami_df = ami_df[['SerialNumber', 'Model', 'EquipmentType']]
     ami_df.dropna(subset=['SerialNumber'], inplace=True)
 
-    # Map Serial → Model & EquipmentType
-    serial_to_model = {
-        row['SerialNumber']: (row['Model'] if pd.notna(row['Model']) else "MODEL MISSING", 
-                              row['EquipmentType'] if pd.notna(row['EquipmentType']) else "EQUIPMENT TYPE MISSING")
-        for _, row in ami_df.iterrows()
-    }
+    serial_to_model = {}
+    serial_to_type = {}
 
-    # Data aggregation
-    output_rows = []
-    model_spares = defaultdict(lambda: defaultdict(lambda: {
-        "Total qty": 0,
-        "Spare qty": 0,
-        "Description": "",
-        "Unit Price ($)": None
-    }))
+    for _, row in ami_df.iterrows():
+        serial = row['SerialNumber']
+        model = row['Model'] if pd.notna(row['Model']) else "MODEL MISSING"
+        equip_type = row['EquipmentType'] if pd.notna(row['EquipmentType']) else "TYPE MISSING"
+        serial_to_model[serial] = model
+        serial_to_type[serial] = equip_type
 
+    model_to_type = {}
+    for serial, model in serial_to_model.items():
+        if model not in model_to_type:
+            model_to_type[model] = serial_to_type[serial]
+
+    model_spares = defaultdict(list)
     last_serial = None
     current_model = None
-    current_equipment = None
 
     for _, row in input_df.iterrows():
         serial = row['Serial']
-
-        # Detect new machine (change in serial)
         if serial != last_serial:
             last_serial = serial
-            current_model, current_equipment = serial_to_model.get(serial, ("MODEL MISSING", "EQUIPMENT TYPE MISSING"))
-            continue  # Skip the header row itself
+            current_model = serial_to_model.get(serial, "MODEL MISSING")
+            continue
 
         if current_model:
-            item_no = row['Item no.']
+            item_no = row['Item No.']
             description = row['Description']
             unit_price = row['Unit Price ($)']
-            total_qty = pd.to_numeric(row['Total qty'], errors='coerce') or 0
-            spare_qty = pd.to_numeric(row['Spare qty'], errors='coerce') or 0
+            total_qty = pd.to_numeric(row['Total Qty'], errors='coerce') or 0
+            spare_qty = pd.to_numeric(row['Spare Qty'], errors='coerce') or 0
 
-            if pd.notna(item_no) and pd.notna(description) and str(item_no).strip().upper() != "TBD":
-                part = model_spares[(current_equipment, current_model)][item_no]
-                part['Total qty'] += total_qty
-                part['Spare qty'] += spare_qty
-                part['Description'] = description
-                part['Unit Price ($)'] = unit_price
+            if pd.notna(item_no) and str(item_no).strip().upper() != 'TBD' and pd.notna(description):
+                model_spares[current_model].append({
+                    'Item no.': item_no,
+                    'Description': description,
+                    'Unit Price ($)': unit_price,
+                    'Total qty': total_qty,
+                    'Spare qty': spare_qty
+                })
 
-    # Output formatting with 'Equipment Type' and 'Model' columns added
-    for (equipment, model), parts in sorted(model_spares.items()):
-        output_rows.append([equipment, model, '', '', '', ''])  # Equipment Type & Model in first columns
-        for item_no, data in sorted(parts.items(), key=lambda x: x[1]['Description']):  # Sort spares by description
+    output_rows = []
+    grouped_models = sorted(
+        [(model_to_type.get(model, "TYPE MISSING"), model) for model in model_spares.keys()],
+        key=lambda x: (x[0], x[1])
+    )
+
+    for equip_type, model in grouped_models:
+        output_rows.append([equip_type, model, '', '', '', '', ''])
+        parts = model_spares[model]
+        grouped_parts = defaultdict(lambda: {
+            "Item no.": None,
+            "Total qty": 0,
+            "Spare qty": 0,
+            "Unit Price ($)": None
+        })
+
+        for part in parts:
+            desc = part['Description']
+            grouped_parts[desc]["Item no."] = part['Item no.']
+            grouped_parts[desc]["Unit Price ($)"] = part['Unit Price ($)']
+            grouped_parts[desc]["Total qty"] += part['Total qty']
+            grouped_parts[desc]["Spare qty"] += part['Spare qty']
+
+        for description in sorted(grouped_parts.keys()):
+            data = grouped_parts[description]
             output_rows.append([
-                '', '',  # Empty Equipment Type & Model columns for spare rows
-                data['Total qty'],
-                data['Spare qty'],
-                item_no,
-                data['Description'],
-                data['Unit Price ($)']
+                '', '', data['Total qty'], data['Spare qty'],
+                data['Item no.'], description, data['Unit Price ($)']
             ])
 
-    # Save output
-    output_df = pd.DataFrame(output_rows, columns=['Equipment Type', 'Model', 'Total qty', 'Spare qty', 'Item no.', 'Description', 'Unit Price ($)'])
-    output_buffer = BytesIO()
-    with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:
-        output_df.to_excel(writer, index=False, sheet_name='Formatted Output')
+    return pd.DataFrame(output_rows, columns=[
+        'Equipment Type', 'Model', 'Total qty', 'Spare qty', 'Item no.', 'Description', 'Unit Price ($)'
+    ])
 
-    return output_buffer
 
-# Streamlit App UI
-st.title("Excel Reorganizer")
-st.write("Upload an input Excel file to generate a formatted output.")
+def process_excel(uploaded_file, ami_path):
+    input_excel = pd.ExcelFile(uploaded_file)
+    ami_df = pd.read_excel(ami_path, sheet_name="EquipmentDB")
 
-uploaded_file = st.file_uploader("Choose an Excel file", type=["xlsx"])
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        for sheet_name in input_excel.sheet_names:
+            input_df = input_excel.parse(sheet_name)
+            try:
+                processed_df = process_single_sheet(input_df, ami_df)
+                processed_df.to_excel(writer, index=False, sheet_name=sheet_name[:31])
+            except Exception as e:
+                error_df = pd.DataFrame({"Error": [f"Could not process sheet '{sheet_name}': {str(e)}"]})
+                error_df.to_excel(writer, index=False, sheet_name=sheet_name[:31])
+    output.seek(0)
+    return output
+
+
+# ===== Streamlit Interface =====
+st.title("🔧 Spare Parts Formatter (Multi-Sheet + Fuzzy Matching)")
+
+uploaded_file = st.file_uploader("Upload the input Excel file", type=["xlsx"])
 
 if uploaded_file:
-    st.write("✅ File uploaded successfully!")
-    
-    # Process the uploaded file
-    output_buffer = process_excel(uploaded_file, AMI_PATH)
-    
-    # Provide download link
+    with st.spinner("Processing all sheets..."):
+        output_excel = process_excel(uploaded_file, "AMI.xlsx")
+
+    st.success("✅ File processed successfully!")
     st.download_button(
-        label="📥 Download Processed Excel",
-        data=output_buffer.getvalue(),
-        file_name="processed_output.xlsx",
+        label="📥 Download Output Excel",
+        data=output_excel,
+        file_name="formatted_output.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
