@@ -4,14 +4,13 @@ from collections import defaultdict
 from io import BytesIO
 import difflib
 import sqlalchemy
-import os
 
 REQUIRED_COLUMNS = [
     'serial', 'total qty', 'spare qty', 'item no.', 'description', 'unit price ($)'
 ]
 
 def find_best_column_matches(df_columns):
-    normalized = {col.lower().strip(): col for col in df_columns}
+    normalized = {col.lower().strip(): col for col in df_columns if isinstance(col, str)}
     matches = {}
     for target in REQUIRED_COLUMNS:
         close_matches = difflib.get_close_matches(target, normalized.keys(), n=1, cutoff=0.6)
@@ -47,49 +46,48 @@ def process_single_sheet(input_df, ami_df):
     model_to_type = {}
     for serial, model in serial_to_model.items():
         if model not in model_to_type:
-            model_to_type[model] = serial_to_type[serial]
+            model_to_type[model] = serial_to_type.get(serial, "TYPE MISSING")
 
     model_spares = defaultdict(list)
     last_serial = None
     current_model = None
+    current_type = None
 
     for _, row in input_df.iterrows():
         serial = row['Serial']
         if serial != last_serial:
             last_serial = serial
             current_model = serial_to_model.get(serial, "MODEL MISSING")
+            current_type = serial_to_type.get(serial, "TYPE MISSING")
             continue
 
-        if current_model:
-            item_no = row['Item No.']
-            description = row['Description']
-            unit_price = row['Unit Price ($)']
-            total_qty = pd.to_numeric(row['Total Qty'], errors='coerce') or 0
-            spare_qty = pd.to_numeric(row['Spare Qty'], errors='coerce') or 0
+        item_no = row['Item No.']
+        description = row['Description']
+        unit_price = row['Unit Price ($)']
+        total_qty = pd.to_numeric(row['Total Qty'], errors='coerce') or 0
+        spare_qty = pd.to_numeric(row['Spare Qty'], errors='coerce') or 0
 
-            if pd.notna(item_no) and str(item_no).strip().upper() != 'TBD' and pd.notna(description):
-                model_spares[current_model].append({
-                    'Item no.': item_no,
-                    'Description': description,
-                    'Unit Price ($)': unit_price,
-                    'Total qty': total_qty,
-                    'Spare qty': spare_qty
-                })
+        if pd.notna(item_no) and str(item_no).strip().upper() != 'TBD' and pd.notna(description):
+            model_spares[(current_type, current_model)].append({
+                'Item no.': item_no,
+                'Description': description,
+                'Unit Price ($)': unit_price,
+                'Total qty': total_qty,
+                'Spare qty': spare_qty
+            })
 
     output_rows = []
-    grouped_models = sorted(
-        [(model_to_type.get(model, "TYPE MISSING"), model) for model in model_spares.keys()],
-        key=lambda x: (x[0], x[1])
-    )
+    grouped_models = sorted(model_spares.keys(), key=lambda x: (x[0], x[1]))
 
     for equip_type, model in grouped_models:
         output_rows.append([equip_type, model, '', '', '', '', ''])
-        parts = model_spares[model]
+        parts = model_spares[(equip_type, model)]
         grouped_parts = defaultdict(lambda: {
             "Item no.": None,
             "Total qty": 0,
             "Spare qty": 0,
-            "Unit Price ($)": None
+            "Unit Price ($)": None,
+            "Description": ""
         })
 
         for part in parts:
@@ -99,11 +97,11 @@ def process_single_sheet(input_df, ami_df):
             grouped_parts[item_no]["Total qty"] += part['Total qty']
             grouped_parts[item_no]["Spare qty"] += part['Spare qty']
 
-        for item_no in sorted(grouped_parts.keys()):
+        for item_no in sorted(grouped_parts.keys(), key=lambda x: grouped_parts[x]["Description"]):
             data = grouped_parts[item_no]
             output_rows.append([
                 '', '', data['Total qty'], data['Spare qty'],
-                 item_no, data['Description'], data['Unit Price ($)']
+                item_no, data['Description'], data['Unit Price ($)']
             ])
 
     return pd.DataFrame(output_rows, columns=[
@@ -127,13 +125,13 @@ def process_excel(uploaded_file):
     output.seek(0)
     return output
 
-# ===== Streamlit UI =====
-st.title("🔧 Excel Re-organizer with SQL Backend")
+# ===== Streamlit Interface =====
+st.title("🔧 Excel Re-organizer")
 
 uploaded_file = st.file_uploader("Upload the input Excel file", type=["xlsx"])
 
 if uploaded_file:
-    with st.spinner("Processing all sheets using SQL data..."):
+    with st.spinner("Processing all sheets..."):
         output_excel = process_excel(uploaded_file)
 
     st.success("✅ File processed successfully!")
