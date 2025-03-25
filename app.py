@@ -126,12 +126,12 @@ def process_excel(uploaded_file):
     return output
 
 # ===== Streamlit Interface =====
-st.title("🔧 Excel Re-organizer")
+st.title("🔧 Excel Re-organizer (SQL connected)")
 
 uploaded_file = st.file_uploader("Upload the input Excel file", type=["xlsx"])
 
 if uploaded_file:
-    with st.spinner("Processing all sheets..."):
+    with st.spinner("Processing all sheets with SQL data..."):
         output_excel = process_excel(uploaded_file)
 
     st.success("✅ File processed successfully!")
